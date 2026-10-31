@@ -1,9 +1,12 @@
-def load(String policyFile = 'policies/coverage-policy.yml') {
-    if (!fileExists(policyFile)) {
-        error "Coverage policy file not found: ${policyFile}"
+﻿def load(String policyResource = 'org/enterprise/cicd/coverage-policy.yml') {
+
+    def policyText = libraryResource(policyResource)
+
+    if (!policyText?.trim()) {
+        error "Coverage policy resource is empty: ${policyResource}"
     }
 
-    def policy = readYaml(file: policyFile)
+    def policy = readYaml(text: policyText)
 
     if (!(policy?.coverage instanceof Map)) {
         error "Invalid coverage policy: missing coverage configuration."
