@@ -61,20 +61,16 @@ jobs:
         run: ./mvnw -B -ntp clean verify
         working-directory: ${{ inputs.working-directory }}
 
-      - name: Upload test reports
+
+      - name: Upload test and coverage reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: maven-test-reports-${{ github.run_id }}
+          name: quality-reports-${{ github.run_id }}
           path: |
             ${{ inputs.working-directory }}/**/target/surefire-reports/
             ${{ inputs.working-directory }}/**/target/failsafe-reports/
+            ${{ inputs.working-directory }}/**/target/site/jacoco/
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Capture build result
-        id: result
-        if: always()
-        shell: bash
-        run: |
-          echo "status=${{ job.status }}" >> "$GITHUB_OUTPUT"
