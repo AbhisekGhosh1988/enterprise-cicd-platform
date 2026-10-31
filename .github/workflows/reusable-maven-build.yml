@@ -61,6 +61,77 @@ jobs:
         run: ./mvnw -B -ntp clean verify
         working-directory: ${{ inputs.working-directory }}
 
+      # Enforce centrally managed JaCoCo coverage threshold
+      - name: Enforce code coverage
+        shell: bash
+        env:
+          MIN_LINE_COVERAGE: '80'
+          APP_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          app_dir = Path(os.environ["APP_DIRECTORY"])
+          report = app_dir / "target/site/jacoco/jacoco.xml"
+          threshold = float(os.environ["MIN_LINE_COVERAGE"])
+
+          if not report.is_file():
+              print(f"ERROR: JaCoCo report not found: {report}")
+              sys.exit(1)
+
+          root = ET.parse(report).getroot()
+
+          line_counter = next(
+              (counter for counter in root.findall("counter")
+               if counter.attrib.get("type") == "LINE"),
+              None
+          )
+
+          if line_counter is None:
+              print("ERROR: JaCoCo LINE counter not found.")
+              sys.exit(1)
+
+          missed = int(line_counter.attrib["missed"])
+          covered = int(line_counter.attrib["covered"])
+          total = missed + covered
+
+          if total == 0:
+              print("ERROR: No executable lines found.")
+              sys.exit(1)
+
+          percentage = covered * 100.0 / total
+
+          print(f"Total lines: {total}")
+          print(f"Covered lines: {covered}")
+          print(f"Missed lines: {missed}")
+          print(f"Line coverage: {percentage:.2f}%")
+          print(f"Required coverage: {threshold:.2f}%")
+
+          summary = (
+              "## JaCoCo Coverage Gate\n\n"
+              f"| Metric | Result |\n"
+              f"|---|---:|\n"
+              f"| Total lines | {total} |\n"
+              f"| Covered lines | {covered} |\n"
+              f"| Missed lines | {missed} |\n"
+              f"| Line coverage | {percentage:.2f}% |\n"
+              f"| Required | {threshold:.2f}% |\n"
+          )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+
+          if percentage < threshold:
+              print("COVERAGE GATE FAILED")
+              sys.exit(1)
+
+          print("COVERAGE GATE PASSED")
+          PY
+
+
 
       - name: Upload test and coverage reports
         if: always()

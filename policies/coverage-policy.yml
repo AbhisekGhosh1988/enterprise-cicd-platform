@@ -1,0 +1,10 @@
+coverage:
+  enabled: true
+
+  minimum:
+    line: 80
+    branch: 0
+
+  failure:
+    missing-report: true
+    below-threshold: true
