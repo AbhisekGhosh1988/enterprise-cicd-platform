@@ -1,4 +1,5 @@
-﻿def readPolicy(String policyResource = 'org/enterprise/cicd/coverage-policy.yml') {
+﻿
+def call(String policyResource = 'org/enterprise/cicd/coverage-policy.yml') {
 
     def policyText = libraryResource(policyResource)
 
@@ -26,12 +27,12 @@
     def branchThreshold = coverage.minimum.branch
 
     if (!(lineThreshold instanceof Number) ||
-        lineThreshold < 0 || lineThreshold > 100) {
+            lineThreshold < 0 || lineThreshold > 100) {
         error "Invalid line coverage threshold: ${lineThreshold}"
     }
 
     if (!(branchThreshold instanceof Number) ||
-        branchThreshold < 0 || branchThreshold > 100) {
+            branchThreshold < 0 || branchThreshold > 100) {
         error "Invalid branch coverage threshold: ${branchThreshold}"
     }
 
@@ -52,10 +53,10 @@
     }
 
     return [
-        enabled       : coverage.enabled,
-        minimumLine   : lineThreshold,
-        minimumBranch : branchThreshold,
-        failMissing   : failMissing,
-        failBelow     : failBelow
+            enabled       : coverage.enabled,
+            minimumLine   : lineThreshold,
+            minimumBranch : branchThreshold,
+            failMissing   : failMissing,
+            failBelow     : failBelow
     ]
 }
