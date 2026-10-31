@@ -11,11 +11,6 @@ on:
         type: string
         default: '21'
 
-      maven-command:
-        description: Maven command to execute
-        required: false
-        type: string
-        default: 'clean verify'
 
       working-directory:
         description: Application root directory
@@ -63,7 +58,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
       - name: Build application and execute tests
-        run: ./mvnw -B -ntp ${{ inputs.maven-command }}
+        run: ./mvnw -B -ntp clean verify
         working-directory: ${{ inputs.working-directory }}
 
       - name: Upload test reports
