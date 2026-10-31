@@ -1,0 +1,85 @@
+
+name: Reusable Maven Build
+
+on:
+  workflow_call:
+
+    inputs:
+      java-version:
+        description: Java version
+        required: false
+        type: string
+        default: '21'
+
+      maven-command:
+        description: Maven command to execute
+        required: false
+        type: string
+        default: 'clean verify'
+
+      working-directory:
+        description: Application root directory
+        required: false
+        type: string
+        default: '.'
+
+    outputs:
+      build-status:
+        description: Build execution result
+        value: ${{ jobs.build.outputs.status }}
+
+jobs:
+
+  build:
+
+    name: Maven Build and Unit Tests
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+
+    steps:
+
+      - name: Checkout application repository
+        uses: actions/checkout@v4
+
+      - name: Configure Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+
+      - name: Display Java and Maven versions
+        run: |
+          java --version
+          ./mvnw --version
+        working-directory: ${{ inputs.working-directory }}
+
+      - name: Build application and execute tests
+        run: ./mvnw -B -ntp ${{ inputs.maven-command }}
+        working-directory: ${{ inputs.working-directory }}
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-test-reports-${{ github.run_id }}
+          path: |
+            ${{ inputs.working-directory }}/**/target/surefire-reports/
+            ${{ inputs.working-directory }}/**/target/failsafe-reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Capture build result
+        id: result
+        if: always()
+        shell: bash
+        run: |
+          echo "status=${{ job.status }}" >> "$GITHUB_OUTPUT"
