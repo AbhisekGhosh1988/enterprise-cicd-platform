@@ -1,4 +1,4 @@
-﻿def load(String policyResource = 'org/enterprise/cicd/coverage-policy.yml') {
+﻿def readPolicy(String policyResource = 'org/enterprise/cicd/coverage-policy.yml') {
 
     def policyText = libraryResource(policyResource)
 
