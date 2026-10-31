@@ -3,7 +3,6 @@ name: Reusable Maven Build
 
 on:
   workflow_call:
-
     inputs:
       java-version:
         description: Java version
@@ -11,12 +10,26 @@ on:
         type: string
         default: '21'
 
-
       working-directory:
         description: Application root directory
         required: false
         type: string
         default: '.'
+
+      sonar-organization:
+        description: SonarQube Cloud organization key
+        required: true
+        type: string
+
+      sonar-project-key:
+        description: SonarQube Cloud project key
+        required: true
+        type: string
+
+    secrets:
+      SONAR_TOKEN:
+        description: SonarQube Cloud analysis token
+        required: true
 
     outputs:
       build-status:
@@ -24,14 +37,10 @@ on:
         value: ${{ jobs.build.outputs.status }}
 
 jobs:
-
   build:
-
     name: Maven Build and Unit Tests
-
     runs-on: ubuntu-latest
-
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     permissions:
       contents: read
@@ -40,9 +49,10 @@ jobs:
       status: ${{ steps.result.outputs.status }}
 
     steps:
-
       - name: Checkout application repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure Java
         uses: actions/setup-java@v4
@@ -52,16 +62,15 @@ jobs:
           cache: maven
 
       - name: Display Java and Maven versions
+        working-directory: ${{ inputs.working-directory }}
         run: |
           java --version
           ./mvnw --version
-        working-directory: ${{ inputs.working-directory }}
 
       - name: Build application and execute tests
-        run: ./mvnw -B -ntp clean verify
         working-directory: ${{ inputs.working-directory }}
+        run: ./mvnw -B -ntp clean verify
 
-      # Enforce centrally managed JaCoCo coverage threshold
       - name: Enforce code coverage
         shell: bash
         env:
@@ -112,8 +121,8 @@ jobs:
 
           summary = (
               "## JaCoCo Coverage Gate\n\n"
-              f"| Metric | Result |\n"
-              f"|---|---:|\n"
+              "| Metric | Result |\n"
+              "|---|---:|\n"
               f"| Total lines | {total} |\n"
               f"| Covered lines | {covered} |\n"
               f"| Missed lines | {missed} |\n"
@@ -131,7 +140,21 @@ jobs:
           print("COVERAGE GATE PASSED")
           PY
 
-
+      - name: SonarQube Cloud Analysis
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ inputs.sonar-organization }}
+          SONAR_PROJECT_KEY: ${{ inputs.sonar-project-key }}
+        run: |
+          ./mvnw -B -ntp \
+            org.sonarsource.scanner.maven:sonar-maven-plugin:5.6.0.6792:sonar \
+            -Dsonar.organization="$SONAR_ORGANIZATION" \
+            -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
 
       - name: Upload test and coverage reports
         if: always()
@@ -145,3 +168,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Capture final build status
+        id: result
+        if: always()
+        shell: bash
+        run: |
+          echo "status=${{ job.status }}" >> "$GITHUB_OUTPUT"
