@@ -21,6 +21,13 @@ class DockerBuild implements Serializable {
         )
         def timeoutMinutes = config.get('timeoutMinutes', 15)
 
+        // Publishing is opt-in. Existing validation jobs remain local-only.
+        def publish = config.get('publish', false)
+        def registryCredentialId = config.get(
+                'registryCredentialId',
+                'ghcr-publish-token'
+        )
+
         steps.stage('Docker Image Build') {
 
             steps.timeout(time: timeoutMinutes, unit: 'MINUTES') {
@@ -62,12 +69,58 @@ class DockerBuild implements Serializable {
 
                     steps.bat "docker image inspect \"${imageTag}\""
 
+                    if (publish) {
+
+                        steps.stage('Publish Docker Image to GHCR') {
+
+                            steps.echo 'Authenticating with GitHub Container Registry'
+
+                            steps.withCredentials([
+                                    steps.usernamePassword(
+                                            credentialsId: registryCredentialId,
+                                            usernameVariable: 'GHCR_USERNAME',
+                                            passwordVariable: 'GHCR_TOKEN'
+                                    )
+                            ]) {
+
+                                try {
+
+                                    steps.bat(
+                                            script: '@echo off\r\necho %GHCR_TOKEN%| docker login ghcr.io -u %GHCR_USERNAME% --password-stdin'
+                                    )
+
+                                    steps.echo "Publishing Docker image: ${imageTag}"
+
+                                    steps.bat "docker push \"${imageTag}\""
+
+                                    steps.echo 'Verifying published image manifest'
+
+                                    steps.bat "docker manifest inspect \"${imageTag}\""
+
+                                    steps.echo 'GHCR IMAGE PUBLISHED AND VERIFIED SUCCESSFULLY'
+
+                                } finally {
+
+                                    steps.echo 'Logging out from GHCR'
+
+                                    steps.bat(
+                                            script: '@echo off\r\ndocker logout ghcr.io',
+                                            returnStatus: true
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        steps.echo 'GHCR publishing disabled. Image remains local.'
+                    }
+
                     steps.echo 'DOCKER IMAGE BUILD COMPLETED SUCCESSFULLY'
 
                     return [
                             imageName: imageName,
                             imageTag: imageTag,
-                            gitCommit: gitCommit
+                            gitCommit: gitCommit,
+                            published: publish
                     ]
                 }
             }
