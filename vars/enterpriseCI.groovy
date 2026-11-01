@@ -1,6 +1,7 @@
 
 import org.enterprise.cicd.MavenBuild
 import org.enterprise.cicd.CoverageValidator
+import org.enterprise.cicd.SonarAnalysis
 
 def call(Map config = [:]) {
 
@@ -8,10 +9,13 @@ def call(Map config = [:]) {
     def mavenWrapper = config.get('mavenWrapper', 'mvnw.cmd')
     def mavenGoals = config.get('mavenGoals', 'clean verify')
     def timeoutMinutes = config.get('timeoutMinutes', 30)
+
     def coverageReport = config.get(
             'coverageReport',
             'target/site/jacoco/jacoco.xml'
     )
+
+    def sonarEnabled = config.get('sonarEnabled', true)
 
     stage('Enterprise CI Pipeline') {
 
@@ -47,13 +51,36 @@ def call(Map config = [:]) {
                 policy: policy
         ])
 
+        def sonarResult = [skipped: true]
+
+        if (sonarEnabled) {
+
+            echo '======================================'
+            echo 'PHASE 3: SONARCLOUD ANALYSIS'
+            echo '======================================'
+
+            def sonarComponent = new SonarAnalysis(this)
+
+            sonarResult = sonarComponent.run([
+                    workingDirectory: workingDirectory,
+                    mavenWrapper: mavenWrapper,
+                    coverageReport: coverageReport,
+                    timeoutMinutes: 15,
+                    qualityGateTimeoutSeconds: 300
+            ])
+
+        } else {
+            echo 'SonarCloud analysis disabled by pipeline configuration'
+        }
+
         echo '======================================'
         echo 'ENTERPRISE CI PIPELINE COMPLETED'
         echo '======================================'
 
         return [
                 buildPassed: true,
-                coverage: coverageResult
+                coverage: coverageResult,
+                sonar: sonarResult
         ]
     }
 }
