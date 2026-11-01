@@ -66,7 +66,14 @@ class CoverageValidator implements Serializable {
 
             def reportXml = steps.readFile(reportPath)
 
-            def xml = new XmlSlurper(false, false).parseText(reportXml)
+// JaCoCo includes a DOCTYPE declaration.
+// Remove it because coverage counters do not require a DTD.
+            def sanitizedXml = reportXml.replaceFirst(
+                    /(?s)<!DOCTYPE[^>]*>/,
+                    ''
+            )
+
+            def xml = new XmlSlurper(false, false).parseText(sanitizedXml)
 
             def lineCounter = xml.counter.find {
                 it.@type.text() == 'LINE'
