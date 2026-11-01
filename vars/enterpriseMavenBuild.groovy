@@ -1,6 +1,4 @@
-﻿import org.enterprise.cicd.MavenBuild
-
-def call(Map config = [:]) {
-    def mavenBuild = new MavenBuild(this)
+﻿def call(Map config = [:]) {
+    def mavenBuild = new org.enterprise.cicd.MavenBuild(this)
     mavenBuild.run(config)
 }
