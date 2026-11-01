@@ -12,71 +12,52 @@ class KubernetesDeploy implements Serializable {
     def run(Map config = [:]) {
 
         def workingDirectory = config.get('workingDirectory', '.')
-        def manifestDirectory = config.get(
-                'manifestDirectory',
-                'k8s/dev'
-        )
-
-        def deploymentFile = config.get(
-                'deploymentFile',
-                'deployment.yaml'
-        )
-
-        def serviceFile = config.get(
-                'serviceFile',
-                'service.yaml'
-        )
+        def manifestDirectory = config.get('manifestDirectory', 'k8s/dev')
+        def deploymentFile = config.get('deploymentFile', 'deployment.yaml')
+        def serviceFile = config.get('serviceFile', 'service.yaml')
 
         def namespace = config.get('namespace', 'dev')
-        def deploymentName = config.get(
-                'deploymentName',
-                'cicd-demo'
-        )
+        def deploymentName = config.get('deploymentName', 'cicd-demo')
+        def serviceName = config.get('serviceName', 'cicd-demo')
+        def containerName = config.get('containerName', 'cicd-demo')
 
-        def containerName = config.get(
-                'containerName',
-                'cicd-demo'
-        )
+        def expectedContext = config.get('expectedContext', 'docker-desktop')
 
-        def expectedContext = config.get(
-                'expectedContext',
-                'docker-desktop'
+        def imageRepository = config.get(
+                'imageRepository',
+                'ghcr.io/abhisekghosh1988/cicd-demo'
         )
 
         def imageTag = config.get('imageTag', '')
         def gitCommit = config.get('gitCommit', '')
 
-        def expectedReplicas = config.get(
-                'expectedReplicas',
-                2
-        )
-
-        def timeoutMinutes = config.get(
-                'timeoutMinutes',
-                10
-        )
+        def expectedReplicas = config.get('expectedReplicas', 2)
+        def timeoutMinutes = config.get('timeoutMinutes', 10)
+        def rolloutTimeoutSeconds = config.get('rolloutTimeoutSeconds', 180)
+        def healthCheckPort = config.get('healthCheckPort', 18081)
 
         steps.stage('Kubernetes Dev Deployment') {
 
-            steps.timeout(
-                    time: timeoutMinutes,
-                    unit: 'MINUTES'
-            ) {
+            steps.timeout(time: timeoutMinutes, unit: 'MINUTES') {
 
                 steps.dir(workingDirectory) {
 
-                    steps.echo 'Starting Kubernetes Deployment'
+                    steps.echo 'Starting Enterprise Kubernetes Deployment'
 
-                    // -------------------------------------------------
-                    // PHASE 1: Validate configuration
-                    // -------------------------------------------------
+                    // PHASE 1: Protect the target environment
 
-                    if (!(namespace ==~ /[a-z0-9]([-a-z0-9]*[a-z0-9])?/)) {
-                        steps.error("Invalid Kubernetes namespace: ${namespace}")
+                    if (namespace != 'dev') {
+                        steps.error(
+                                'This deployment component currently supports Dev namespace only.'
+                        )
                     }
 
                     if (!(deploymentName ==~ /[a-z0-9]([-a-z0-9]*[a-z0-9])?/)) {
                         steps.error("Invalid Deployment name: ${deploymentName}")
+                    }
+
+                    if (!(serviceName ==~ /[a-z0-9]([-a-z0-9]*[a-z0-9])?/)) {
+                        steps.error("Invalid Service name: ${serviceName}")
                     }
 
                     if (!(containerName ==~ /[a-z0-9]([-a-z0-9]*[a-z0-9])?/)) {
@@ -88,25 +69,35 @@ class KubernetesDeploy implements Serializable {
                         steps.error('Expected replicas must be a positive integer')
                     }
 
-                    if (!(gitCommit ==~ /[0-9a-fA-F]{12}/)) {
-                        steps.error('Invalid Git commit SHA. Expected 12 hexadecimal characters.')
+                    if (!(healthCheckPort instanceof Integer) ||
+                            healthCheckPort < 1024 ||
+                            healthCheckPort > 65535) {
+                        steps.error('Invalid health check port')
                     }
 
-                    if (!imageTag || imageTag.contains(' ') ||
-                            !imageTag.endsWith(":${gitCommit}")) {
+                    if (!(gitCommit ==~ /[0-9a-f]{12}/)) {
+                        steps.error('Git commit must be a 12-character lowercase SHA')
+                    }
+
+                    if (!(imageRepository ==~
+                            /[a-z0-9.-]+(\/[a-z0-9._-]+)+/)) {
+                        steps.error('Invalid image repository')
+                    }
+
+                    def expectedImage = "${imageRepository}:${gitCommit}"
+
+                    if (imageTag != expectedImage) {
                         steps.error(
-                                "Image tag must end with the current Git commit SHA: ${gitCommit}"
+                                "Image tag mismatch. Expected ${expectedImage}, received ${imageTag}"
                         )
                     }
 
-                    steps.echo "Namespace: ${namespace}"
+                    steps.echo "Target namespace: ${namespace}"
                     steps.echo "Deployment: ${deploymentName}"
-                    steps.echo "Expected replicas: ${expectedReplicas}"
                     steps.echo "Image: ${imageTag}"
+                    steps.echo "Expected replicas: ${expectedReplicas}"
 
-                    // -------------------------------------------------
-                    // PHASE 2: Validate manifest files
-                    // -------------------------------------------------
+                    // PHASE 2: Locate manifests
 
                     def deploymentPath =
                             "${manifestDirectory}/${deploymentFile}"
@@ -115,25 +106,16 @@ class KubernetesDeploy implements Serializable {
                             "${manifestDirectory}/${serviceFile}"
 
                     if (!steps.fileExists(deploymentPath)) {
-                        steps.error(
-                                "Deployment manifest not found: ${deploymentPath}"
-                        )
+                        steps.error("Deployment manifest not found: ${deploymentPath}")
                     }
 
                     if (!steps.fileExists(servicePath)) {
-                        steps.error(
-                                "Service manifest not found: ${servicePath}"
-                        )
+                        steps.error("Service manifest not found: ${servicePath}")
                     }
 
-                    steps.echo 'Both Kubernetes manifest files exist.'
-
-                    // -------------------------------------------------
                     // PHASE 3: Verify Kubernetes connectivity
-                    // -------------------------------------------------
 
                     steps.echo 'Checking Kubernetes CLI...'
-
                     steps.bat 'kubectl version --client'
 
                     def currentContext = steps.bat(
@@ -141,79 +123,94 @@ class KubernetesDeploy implements Serializable {
                             returnStdout: true
                     ).trim()
 
-                    steps.echo "Current Kubernetes context: ${currentContext}"
-
                     if (currentContext != expectedContext) {
                         steps.error(
                                 "Unexpected Kubernetes context. Expected ${expectedContext}, found ${currentContext}"
                         )
                     }
 
-                    // -------------------------------------------------
+                    steps.echo "Kubernetes context verified: ${currentContext}"
+
                     // PHASE 4: Verify namespace
-                    // -------------------------------------------------
+
+                    steps.bat("kubectl get namespace ${namespace}")
+
+                    // PHASE 5: Verify existing Deployment and container
 
                     steps.bat(
-                            "kubectl get namespace ${namespace}"
+                            "kubectl get deployment ${deploymentName} -n ${namespace}"
                     )
 
-                    // -------------------------------------------------
-                    // PHASE 5: Server-side manifest validation
-                    // -------------------------------------------------
+                    def existingContainer = steps.bat(
+                            script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.spec.template.spec.containers[?(@.name=='${containerName}')].name}\"",
+                            returnStdout: true
+                    ).trim()
 
-                    steps.echo 'Validating Deployment manifest...'
+                    if (existingContainer != containerName) {
+                        steps.error(
+                                "Container ${containerName} was not found in Deployment ${deploymentName}"
+                        )
+                    }
+
+                    // PHASE 6: Render the new image into a temporary manifest
+
+                    steps.echo 'Rendering Deployment manifest with immutable image'
+
+                    def renderedDirectory = 'target/k8s'
+                    def renderedDeploymentPath =
+                            "${renderedDirectory}/dev-deployment-rendered.yaml"
 
                     steps.bat(
-                            "kubectl apply --dry-run=server -f \"${deploymentPath}\""
+                            'if not exist target\\k8s mkdir target\\k8s'
                     )
 
-                    steps.echo 'Validating Service manifest...'
+                    steps.bat(
+                            "kubectl set image -f \"${deploymentPath}\" ${containerName}=${imageTag} --local -o yaml > \"${renderedDeploymentPath}\""
+                    )
+
+                    if (!steps.fileExists(renderedDeploymentPath)) {
+                        steps.error('Rendered Deployment manifest was not created')
+                    }
+
+                    steps.echo 'Rendered Deployment manifest successfully.'
+
+                    // PHASE 7: Validate both manifests against API server
+
+                    steps.echo 'Validating rendered Deployment...'
+
+                    steps.bat(
+                            "kubectl apply --dry-run=server -f \"${renderedDeploymentPath}\""
+                    )
+
+                    steps.echo 'Validating Service...'
 
                     steps.bat(
                             "kubectl apply --dry-run=server -f \"${servicePath}\""
                     )
 
-                    steps.echo 'Kubernetes manifests passed server-side validation.'
+                    // PHASE 8: Apply resources
 
-                    // -------------------------------------------------
-                    // PHASE 6: Apply Kubernetes manifests
-                    // -------------------------------------------------
-
-                    steps.echo 'Applying Kubernetes Deployment manifest...'
-
-                    steps.bat(
-                            "kubectl apply -f \"${deploymentPath}\""
-                    )
-
-                    steps.echo 'Applying Kubernetes Service manifest...'
+                    steps.echo 'Applying Service...'
 
                     steps.bat(
                             "kubectl apply -f \"${servicePath}\""
                     )
 
-                    // -------------------------------------------------
-                    // PHASE 7: Deploy immutable image
-                    // -------------------------------------------------
-
-                    steps.echo "Updating Deployment image to ${imageTag}"
+                    steps.echo 'Applying Deployment with new image...'
 
                     steps.bat(
-                            "kubectl set image deployment/${deploymentName} ${containerName}=${imageTag} -n ${namespace}"
+                            "kubectl apply -f \"${renderedDeploymentPath}\""
                     )
 
-                    // -------------------------------------------------
-                    // PHASE 8: Wait for rollout
-                    // -------------------------------------------------
+                    // PHASE 9: Wait for rollout
 
-                    steps.echo 'Waiting for Kubernetes rollout...'
+                    steps.echo 'Waiting for Deployment rollout...'
 
                     steps.bat(
-                            "kubectl rollout status deployment/${deploymentName} -n ${namespace} --timeout=180s"
+                            "kubectl rollout status deployment/${deploymentName} -n ${namespace} --timeout=${rolloutTimeoutSeconds}s"
                     )
 
-                    // -------------------------------------------------
-                    // PHASE 9: Verify replica availability
-                    // -------------------------------------------------
+                    // PHASE 10: Verify replica availability
 
                     def readyReplicas = steps.bat(
                             script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.status.readyReplicas}\"",
@@ -230,9 +227,7 @@ class KubernetesDeploy implements Serializable {
 
                     if (!readyReplicas.isInteger() ||
                             !availableReplicas.isInteger()) {
-                        steps.error(
-                                'Unable to determine Deployment replica availability.'
-                        )
+                        steps.error('Unable to determine replica availability')
                     }
 
                     if (readyReplicas.toInteger() != expectedReplicas) {
@@ -247,9 +242,77 @@ class KubernetesDeploy implements Serializable {
                         )
                     }
 
-                    // -------------------------------------------------
-                    // PHASE 10: Final deployment verification
-                    // -------------------------------------------------
+                    // PHASE 11: Explicit HTTP health verification
+
+                    steps.echo 'Starting temporary Kubernetes port-forward for HTTP health checks'
+
+                    steps.powershell(
+                            script: '''
+$ErrorActionPreference = "Stop"
+
+$namespace = "dev"
+$serviceName = "cicd-demo"
+$localPort = 18081
+
+$forward = $null
+
+try {
+    $forward = Start-Process `
+        -FilePath "kubectl" `
+        -ArgumentList @(
+            "port-forward",
+            "-n", $namespace,
+            "service/$serviceName",
+            "$($localPort):8080",
+            "--address=127.0.0.1"
+        ) `
+        -PassThru `
+        -WindowStyle Hidden
+
+    $forwardReady = $false
+
+    for ($i = 0; $i -lt 30; $i++) {
+
+        if ($forward.HasExited) {
+            throw "kubectl port-forward exited unexpectedly."
+        }
+
+        try {
+            $null = Invoke-RestMethod `
+                -Uri "http://127.0.0.1:$localPort/actuator/health/readiness" `
+                -TimeoutSec 3
+
+            $forwardReady = $true
+            break
+        }
+        catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    if (-not $forwardReady) {
+        throw "Application readiness HTTP check failed."
+    }
+
+    Write-Host "Readiness endpoint: UP"
+
+    $null = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$localPort/actuator/health/liveness" `
+        -TimeoutSec 5
+
+    Write-Host "Liveness endpoint: UP"
+    Write-Host "APPLICATION HTTP HEALTH CHECKS PASSED"
+}
+finally {
+    if ($null -ne $forward -and -not $forward.HasExited) {
+        Stop-Process -Id $forward.Id -Force
+        Write-Host "Temporary port-forward stopped."
+    }
+}
+'''
+                    )
+
+                    // PHASE 12: Final verification
 
                     steps.echo 'Final Deployment status:'
 
@@ -266,10 +329,10 @@ class KubernetesDeploy implements Serializable {
                     steps.echo 'Kubernetes Service:'
 
                     steps.bat(
-                            "kubectl get service ${deploymentName} -n ${namespace}"
+                            "kubectl get service ${serviceName} -n ${namespace}"
                     )
 
-                    steps.echo 'KUBERNETES DEPLOYMENT COMPLETED SUCCESSFULLY'
+                    steps.echo 'KUBERNETES DEV DEPLOYMENT COMPLETED SUCCESSFULLY'
 
                     return [
                             deploymentName: deploymentName,
@@ -278,6 +341,7 @@ class KubernetesDeploy implements Serializable {
                             gitCommit: gitCommit,
                             readyReplicas: readyReplicas.toInteger(),
                             availableReplicas: availableReplicas.toInteger(),
+                            healthCheckPassed: true,
                             deployed: true
                     ]
                 }
