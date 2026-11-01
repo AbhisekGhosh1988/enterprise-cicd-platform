@@ -44,9 +44,11 @@ class DockerBuild implements Serializable {
                     steps.bat 'docker version'
 
                     def gitCommit = steps.bat(
-                            script: 'git rev-parse --short=12 HEAD',
+                            script: '@echo off\r\ngit rev-parse --short=12 HEAD',
                             returnStdout: true
                     ).trim()
+
+                    steps.echo "Detected Git commit SHA: ${gitCommit}"
 
                     if (!(gitCommit ==~ /[0-9a-fA-F]{12}/)) {
                         steps.error('Invalid Git commit SHA')
