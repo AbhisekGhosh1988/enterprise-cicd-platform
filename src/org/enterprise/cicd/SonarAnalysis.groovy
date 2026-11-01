@@ -39,10 +39,7 @@ class SonarAnalysis implements Serializable {
                 )
 
         def pluginVersion =
-                config.get(
-                        'pluginVersion',
-                        '5.3.0.6276'
-                )
+                config.get('pluginVersion', '5.3.0.6276')
 
         def timeoutMinutes =
                 config.get('timeoutMinutes', 15)
@@ -54,38 +51,26 @@ class SonarAnalysis implements Serializable {
                 !organization?.trim() ||
                 !projectKey?.trim() ||
                 !serverUrl?.trim()) {
-
-            steps.error(
-                    'SonarCloud configuration contains empty required values'
-            )
+            steps.error('SonarCloud configuration contains empty required values')
         }
 
         if (!(timeoutMinutes instanceof Number) ||
                 timeoutMinutes <= 0) {
-
-            steps.error('Sonar timeout must be a positive number')
+            steps.error('Sonar timeout must be positive')
         }
 
         if (!(qualityGateTimeoutSeconds instanceof Number) ||
                 qualityGateTimeoutSeconds <= 0) {
-
-            steps.error(
-                    'Quality Gate timeout must be a positive number'
-            )
+            steps.error('Quality Gate timeout must be positive')
         }
 
         return steps.stage('SonarCloud Analysis and Quality Gate') {
 
             steps.echo 'Starting SonarCloud analysis'
-
             steps.echo "SonarCloud organization: ${organization}"
             steps.echo "SonarCloud project: ${projectKey}"
-            steps.echo "SonarCloud server: ${serverUrl}"
 
-            steps.timeout(
-                    time: timeoutMinutes,
-                    unit: 'MINUTES'
-            ) {
+            steps.timeout(time: timeoutMinutes, unit: 'MINUTES') {
 
                 steps.dir(workingDirectory) {
 
@@ -94,15 +79,11 @@ class SonarAnalysis implements Serializable {
                     }
 
                     if (!steps.fileExists(mavenWrapper)) {
-                        steps.error(
-                                "Maven Wrapper not found: ${mavenWrapper}"
-                        )
+                        steps.error("Maven Wrapper not found: ${mavenWrapper}")
                     }
 
                     if (!steps.fileExists(coverageReport)) {
-                        steps.error(
-                                "JaCoCo XML report not found: ${coverageReport}"
-                        )
+                        steps.error("JaCoCo XML report not found: ${coverageReport}")
                     }
 
                     steps.withCredentials([
@@ -112,17 +93,25 @@ class SonarAnalysis implements Serializable {
                             )
                     ]) {
 
-                        steps.echo 'Executing SonarCloud scanner'
+                        steps.withEnv([
+                                "MAVEN_WRAPPER=${mavenWrapper}",
+                                "SONAR_URL=${serverUrl}",
+                                "SONAR_ORGANIZATION=${organization}",
+                                "SONAR_PROJECT_KEY=${projectKey}",
+                                "SONAR_COVERAGE_REPORT=${coverageReport}",
+                                "SONAR_PLUGIN_VERSION=${pluginVersion}",
+                                "SONAR_QG_TIMEOUT=${qualityGateTimeoutSeconds}"
+                        ]) {
 
-                        steps.bat(
-                                """@echo off
-call "${mavenWrapper}" -B -ntp org.sonarsource.scanner.maven:sonar-maven-plugin:${pluginVersion}:sonar -Dsonar.host.url=${serverUrl} -Dsonar.organization=${organization} -Dsonar.projectKey=${projectKey} -Dsonar.coverage.jacoco.xmlReportPaths=${coverageReport} -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=${qualityGateTimeoutSeconds}
-"""
-                        )
+                            steps.echo 'Executing SonarScanner Maven analysis'
 
-                        steps.echo(
-                                'SONARCLOUD ANALYSIS AND QUALITY GATE PASSED'
-                        )
+                            steps.bat('''
+@echo off
+call "%MAVEN_WRAPPER%" -B -ntp org.sonarsource.scanner.maven:sonar-maven-plugin:%SONAR_PLUGIN_VERSION%:sonar -Dsonar.host.url="%SONAR_URL%" -Dsonar.organization="%SONAR_ORGANIZATION%" -Dsonar.projectKey="%SONAR_PROJECT_KEY%" -Dsonar.coverage.jacoco.xmlReportPaths="%SONAR_COVERAGE_REPORT%" -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=%SONAR_QG_TIMEOUT%
+''')
+
+                            steps.echo 'SONARCLOUD ANALYSIS AND QUALITY GATE PASSED'
+                        }
                     }
                 }
             }
