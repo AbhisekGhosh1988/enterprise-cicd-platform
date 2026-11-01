@@ -1,7 +1,11 @@
 
 package org.enterprise.cicd
 
-import groovy.util.XmlSlurper
+import javax.xml.XMLConstants
+import javax.xml.parsers.DocumentBuilderFactory
+import org.xml.sax.InputSource
+import java.io.StringReader
+import org.w3c.dom.Element
 
 class CoverageValidator implements Serializable {
 
@@ -61,41 +65,104 @@ class CoverageValidator implements Serializable {
                 steps.echo "WARNING: JaCoCo report not found: ${reportPath}"
                 steps.echo 'Coverage validation skipped because policy allows a missing report'
 
-                return [skipped: true, reason: 'Missing JaCoCo report']
+                return [
+                        skipped: true,
+                        reason: 'Missing JaCoCo report'
+                ]
             }
 
             def reportXml = steps.readFile(reportPath)
 
-// JaCoCo includes a DOCTYPE declaration.
-// Remove it because coverage counters do not require a DTD.
+            // Remove JaCoCo DOCTYPE declaration.
+            // Coverage counters do not require a DTD.
             def sanitizedXml = reportXml.replaceFirst(
                     /(?s)<!DOCTYPE[^>]*>/,
                     ''
             )
 
-            def xml = new XmlSlurper(false, false).parseText(sanitizedXml)
+            // Create a secure Java XML parser.
+            def factory = DocumentBuilderFactory.newInstance()
 
-            def lineCounter = xml.counter.find {
-                it.@type.text() == 'LINE'
+            factory.setFeature(
+                    'http://apache.org/xml/features/disallow-doctype-decl',
+                    true
+            )
+
+            factory.setFeature(
+                    'http://xml.org/sax/features/external-general-entities',
+                    false
+            )
+
+            factory.setFeature(
+                    'http://xml.org/sax/features/external-parameter-entities',
+                    false
+            )
+
+            factory.setFeature(
+                    XMLConstants.FEATURE_SECURE_PROCESSING,
+                    true
+            )
+
+            factory.setXIncludeAware(false)
+            factory.setExpandEntityReferences(false)
+
+            factory.setAttribute(
+                    XMLConstants.ACCESS_EXTERNAL_DTD,
+                    ''
+            )
+
+            factory.setAttribute(
+                    XMLConstants.ACCESS_EXTERNAL_SCHEMA,
+                    ''
+            )
+
+            def builder = factory.newDocumentBuilder()
+
+            def document = builder.parse(
+                    new InputSource(new StringReader(sanitizedXml))
+            )
+
+            // Extract JaCoCo coverage counters.
+            // Avoid Groovy closure-based find() operations.
+            def counters = document.getElementsByTagName('counter')
+
+            Element lineCounter = null
+            Element branchCounter = null
+
+            for (int i = 0; i < counters.getLength(); i++) {
+
+                Element counter = (Element) counters.item(i)
+
+                String type = counter.getAttribute('type')
+
+                if (type == 'LINE') {
+                    lineCounter = counter
+                }
+
+                if (type == 'BRANCH') {
+                    branchCounter = counter
+                }
             }
 
-            def branchCounter = xml.counter.find {
-                it.@type.text() == 'BRANCH'
-            }
-
-            if (!lineCounter) {
+            if (lineCounter == null) {
                 steps.error('LINE counter missing from JaCoCo report')
             }
 
-            if (!branchCounter) {
+            if (branchCounter == null) {
                 steps.error('BRANCH counter missing from JaCoCo report')
             }
 
-            long lineMissed = lineCounter.@missed.toString().toLong()
-            long lineCovered = lineCounter.@covered.toString().toLong()
+            long lineMissed =
+                    lineCounter.getAttribute('missed').toLong()
 
-            long branchMissed = branchCounter.@missed.toString().toLong()
-            long branchCovered = branchCounter.@covered.toString().toLong()
+            long lineCovered =
+                    lineCounter.getAttribute('covered').toLong()
+
+            long branchMissed =
+                    branchCounter.getAttribute('missed').toLong()
+
+            long branchCovered =
+                    branchCounter.getAttribute('covered').toLong()
 
             long totalLines = lineMissed + lineCovered
             long totalBranches = branchMissed + branchCovered
@@ -112,11 +179,15 @@ class CoverageValidator implements Serializable {
                     : (branchCovered * 100.0) / totalBranches
 
             def formattedLine = String.format(
-                    java.util.Locale.ROOT, '%.2f', lineCoverage
+                    java.util.Locale.ROOT,
+                    '%.2f',
+                    lineCoverage
             )
 
             def formattedBranch = String.format(
-                    java.util.Locale.ROOT, '%.2f', branchCoverage
+                    java.util.Locale.ROOT,
+                    '%.2f',
+                    branchCoverage
             )
 
             steps.echo "Line coverage: ${formattedLine}%"
