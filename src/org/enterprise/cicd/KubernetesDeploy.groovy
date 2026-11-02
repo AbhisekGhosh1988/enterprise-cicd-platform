@@ -151,7 +151,24 @@ class KubernetesDeploy implements Serializable {
                                 "Container ${containerName} was not found in Deployment ${deploymentName}"
                         )
                     }
+// PHASE 5A: Capture the currently deployed version for rollback
 
+                    def previousImage = steps.bat(
+                            script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.spec.template.spec.containers[?(@.name=='${containerName}')].image}\"",
+                            returnStdout: true
+                    ).trim()
+
+                    def previousRevision = steps.bat(
+                            script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.metadata.annotations.deployment\\.kubernetes\\.io/revision}\"",
+                            returnStdout: true
+                    ).trim()
+
+                    if (!previousImage) {
+                        steps.error('Unable to capture the previous Deployment image. Deployment aborted.')
+                    }
+
+                    steps.echo "Previous image captured: ${previousImage}"
+                    steps.echo "Previous Deployment revision: ${previousRevision ?: 'unknown'}"
                     // PHASE 6: Render the new image into a temporary manifest
 
                     steps.echo 'Rendering Deployment manifest with immutable image'
@@ -347,5 +364,140 @@ finally {
                 }
             }
         }
+    }
+    private void rollbackDeployment(
+            String namespace,
+            String deploymentName,
+            String containerName,
+            String previousImage,
+            Integer expectedReplicas,
+            Integer rolloutTimeoutSeconds
+    ) {
+
+        steps.echo '================================================'
+        steps.echo 'STARTING KUBERNETES DEPLOYMENT ROLLBACK'
+        steps.echo '================================================'
+
+        steps.echo "Restoring image: ${previousImage}"
+
+        // Restore the previous known-good image.
+        steps.bat(
+                "kubectl set image deployment/${deploymentName} " +
+                        "${containerName}=${previousImage} -n ${namespace}"
+        )
+
+        // Wait for the previous version to become available.
+        steps.echo 'Waiting for rollback rollout...'
+
+        steps.bat(
+                "kubectl rollout status deployment/${deploymentName} " +
+                        "-n ${namespace} --timeout=${rolloutTimeoutSeconds}s"
+        )
+
+        // Verify that the original image has been restored.
+        def restoredImage = steps.bat(
+                script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.spec.template.spec.containers[?(@.name=='${containerName}')].image}\"",
+                returnStdout: true
+        ).trim()
+
+        if (restoredImage != previousImage) {
+            steps.error(
+                    "Rollback image mismatch. Expected ${previousImage}, found ${restoredImage}"
+            )
+        }
+
+        // Verify replica availability.
+        def readyReplicas = steps.bat(
+                script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.status.readyReplicas}\"",
+                returnStdout: true
+        ).trim()
+
+        def availableReplicas = steps.bat(
+                script: "@echo off\r\nkubectl get deployment ${deploymentName} -n ${namespace} -o jsonpath=\"{.status.availableReplicas}\"",
+                returnStdout: true
+        ).trim()
+
+        if (!readyReplicas.isInteger() ||
+                !availableReplicas.isInteger() ||
+                readyReplicas.toInteger() != expectedReplicas ||
+                availableReplicas.toInteger() != expectedReplicas) {
+
+            steps.error(
+                    "Rollback replica verification failed. " +
+                            "Expected ${expectedReplicas}, ready=${readyReplicas}, " +
+                            "available=${availableReplicas}"
+            )
+        }
+        // Verify restored application health through Kubernetes Service.
+        steps.echo 'Verifying restored application HTTP health...'
+
+        steps.powershell(
+                script: '''
+$ErrorActionPreference = "Stop"
+
+$namespace = "dev"
+$serviceName = "cicd-demo"
+$localPort = 18081
+$forward = $null
+
+try {
+    $forward = Start-Process `
+        -FilePath "kubectl" `
+        -ArgumentList @(
+            "port-forward",
+            "-n", $namespace,
+            "service/$serviceName",
+            "$($localPort):8080",
+            "--address=127.0.0.1"
+        ) `
+        -PassThru `
+        -WindowStyle Hidden
+
+    $forwardReady = $false
+
+    for ($i = 0; $i -lt 30; $i++) {
+        if ($forward.HasExited) {
+            throw "Rollback health-check port-forward exited unexpectedly."
+        }
+
+        try {
+            $null = Invoke-RestMethod `
+                -Uri "http://127.0.0.1:$localPort/actuator/health/readiness" `
+                -TimeoutSec 3
+
+            $forwardReady = $true
+            break
+        }
+        catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    if (-not $forwardReady) {
+        throw "Rollback readiness HTTP check failed."
+    }
+
+    Write-Host "Rollback readiness endpoint: UP"
+
+    $null = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$localPort/actuator/health/liveness" `
+        -TimeoutSec 5
+
+    Write-Host "Rollback liveness endpoint: UP"
+    Write-Host "ROLLBACK HTTP HEALTH CHECKS PASSED"
+}
+finally {
+    if ($null -ne $forward -and -not $forward.HasExited) {
+        Stop-Process -Id $forward.Id -Force
+        Write-Host "Rollback port-forward stopped."
+    }
+}
+'''
+        )
+        steps.echo 'Rollback image verified successfully.'
+        steps.echo "Restored image: ${restoredImage}"
+        steps.echo "Ready replicas: ${readyReplicas}"
+        steps.echo "Available replicas: ${availableReplicas}"
+        steps.echo 'KUBERNETES DEPLOYMENT ROLLBACK COMPLETED'
     }
 }
