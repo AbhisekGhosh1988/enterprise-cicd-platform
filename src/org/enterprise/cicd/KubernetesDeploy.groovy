@@ -15,7 +15,9 @@ class KubernetesDeploy implements Serializable {
         def deploymentFile = config.get('deploymentFile', 'deployment.yaml')
         def serviceFile = config.get('serviceFile', 'service.yaml')
 
-        def namespace = config.get('namespace', 'dev')
+        def environmentName = config.get('environmentName', 'dev')
+        def namespace = config.get('namespace', environmentName)
+
         def deploymentName = config.get('deploymentName', 'cicd-demo')
         def serviceName = config.get('serviceName', 'cicd-demo')
         def containerName = config.get('containerName', 'cicd-demo')
@@ -35,17 +37,26 @@ class KubernetesDeploy implements Serializable {
         def rolloutTimeoutSeconds = config.get('rolloutTimeoutSeconds', 180)
         def healthCheckPort = config.get('healthCheckPort', 18081)
 
-        steps.stage('Kubernetes Dev Deployment') {
+        steps.stage("Kubernetes ${environmentName.toUpperCase()} Deployment") {
 
             steps.timeout(time: timeoutMinutes, unit: 'MINUTES') {
 
                 steps.dir(workingDirectory) {
 
-                    steps.echo 'Starting Enterprise Kubernetes Deployment'
+                    steps.echo "Starting Enterprise Kubernetes Deployment for ${environmentName.toUpperCase()}"
 
                     // PHASE 1: Protect the target environment.
-                    if (namespace != 'dev') {
-                        steps.error('This deployment component currently supports Dev namespace only.')
+                    def allowedEnvironments = ['dev', 'qa']
+
+                    if (!(environmentName in allowedEnvironments)) {
+                        steps.error("Unsupported deployment environment: ${environmentName}")
+                    }
+
+                    if (namespace != environmentName) {
+                        steps.error(
+                                "Environment and namespace mismatch. " +
+                                        "Environment: ${environmentName}, Namespace: ${namespace}"
+                        )
                     }
 
                     if (!(deploymentName ==~ /[a-z0-9]([-a-z0-9]*[a-z0-9])?/)) {
@@ -160,7 +171,7 @@ class KubernetesDeploy implements Serializable {
                     steps.echo 'Rendering Deployment manifest with immutable image'
 
                     def renderedDirectory = 'target/k8s'
-                    def renderedDeploymentPath = "${renderedDirectory}/dev-deployment-rendered.yaml"
+                    def renderedDeploymentPath = "${renderedDirectory}/${environmentName}-deployment-rendered.yaml"
 
                     steps.bat('if not exist target\\k8s mkdir target\\k8s')
                     steps.bat("kubectl set image -f \"${deploymentPath}\" ${containerName}=${imageTag} --local -o yaml > \"${renderedDeploymentPath}\"")
@@ -227,7 +238,7 @@ class KubernetesDeploy implements Serializable {
 
                     } catch (Exception deploymentFailure) {
                         steps.echo '================================================'
-                        steps.echo 'NEW DEPLOYMENT FAILED - AUTOMATIC ROLLBACK STARTING'
+                        steps.echo "${environmentName.toUpperCase()} DEPLOYMENT FAILED - AUTOMATIC ROLLBACK STARTING"
                         steps.echo '================================================'
                         steps.echo "Deployment failure: ${deploymentFailure.getMessage()}"
                         steps.echo "Restoring previously deployed image: ${previousImage}"
@@ -236,6 +247,7 @@ class KubernetesDeploy implements Serializable {
                             // This is deliberately unconditional. Setting the same image
                             // is safe if the failed apply did not change the Deployment.
                             rollbackDeployment(
+                                    environmentName,
                                     namespace,
                                     deploymentName,
                                     serviceName,
@@ -247,7 +259,7 @@ class KubernetesDeploy implements Serializable {
                             )
                         } catch (Exception rollbackFailure) {
                             steps.echo '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
-                            steps.echo 'AUTOMATIC ROLLBACK FAILED'
+                            steps.echo "AUTOMATIC ${environmentName.toUpperCase()} ROLLBACK FAILED"
                             steps.echo '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
                             steps.echo "Rollback failure: ${rollbackFailure.getMessage()}"
                             steps.echo 'Manual investigation is required. Current Deployment state:'
@@ -276,7 +288,7 @@ class KubernetesDeploy implements Serializable {
                     steps.echo 'Kubernetes Service:'
                     steps.bat("kubectl get service ${serviceName} -n ${namespace}")
 
-                    steps.echo 'KUBERNETES DEV DEPLOYMENT COMPLETED SUCCESSFULLY'
+                    steps.echo "KUBERNETES ${environmentName.toUpperCase()} DEPLOYMENT COMPLETED SUCCESSFULLY"
 
                     return [
                             deploymentName: deploymentName,
@@ -300,6 +312,7 @@ class KubernetesDeploy implements Serializable {
      * Deployment and application are healthy before reporting rollback success.
      */
     private void rollbackDeployment(
+            String environmentName,
             String namespace,
             String deploymentName,
             String serviceName,
@@ -311,7 +324,7 @@ class KubernetesDeploy implements Serializable {
     ) {
 
         steps.echo '================================================'
-        steps.echo 'STARTING KUBERNETES DEPLOYMENT ROLLBACK'
+        steps.echo "STARTING ${environmentName.toUpperCase()} KUBERNETES DEPLOYMENT ROLLBACK"
         steps.echo '================================================'
         steps.echo "Restoring image: ${previousImage}"
 
@@ -367,7 +380,7 @@ class KubernetesDeploy implements Serializable {
         steps.echo "Restored image: ${restoredImage}"
         steps.echo "Ready replicas: ${readyReplicas}"
         steps.echo "Available replicas: ${availableReplicas}"
-        steps.echo 'KUBERNETES DEPLOYMENT ROLLBACK COMPLETED'
+        steps.echo "${environmentName.toUpperCase()} KUBERNETES DEPLOYMENT ROLLBACK COMPLETED"
     }
 
     /**
